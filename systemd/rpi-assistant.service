@@ -1,0 +1,44 @@
+[Unit]
+Description=Raspberry Pi Assistant Vocal
+Documentation=https://github.com/votre-repo/rpi-assistant
+After=network.target bluetooth.target pulseaudio.service
+Wants=bluetooth.target
+Requires=network.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/opt/rpi-assistant
+Environment=PATH=/opt/rpi-assistant/venv/bin
+Environment=PYTHONPATH=/opt/rpi-assistant/src
+ExecStartPre=/bin/sleep 10
+ExecStart=/opt/rpi-assistant/venv/bin/python /opt/rpi-assistant/src/assistant.py
+ExecReload=/bin/kill -HUP $MAINPID
+KillMode=mixed
+Restart=always
+RestartSec=10
+TimeoutStartSec=120
+TimeoutStopSec=30
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=rpi-assistant
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/rpi-assistant/logs /tmp /boot
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+
+# Resources
+MemoryMax=512M
+CPUQuota=50%
+
+[Install]
+WantedBy=multi-user.target

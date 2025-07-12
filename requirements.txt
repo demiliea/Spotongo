@@ -1,0 +1,30 @@
+# Dépendances Python pour Raspberry Pi Assistant Vocal
+# Version optimisée pour Raspberry Pi Zero 2 W
+
+# OpenAI API
+openai>=1.0.0
+
+# Audio
+pyaudio>=0.2.11
+pydub>=0.25.1
+wave
+
+# TTS (Text-to-Speech)
+gTTS>=2.3.0
+pygame>=2.1.0
+
+# Bluetooth
+pybluez>=0.23
+
+# GPIO pour Raspberry Pi
+RPi.GPIO>=0.7.1
+
+# Utilitaires
+requests>=2.25.1
+configparser
+
+# Logging amélioré
+colorlog>=6.7.0
+
+# Interface système
+psutil>=5.9.0
