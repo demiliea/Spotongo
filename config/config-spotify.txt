@@ -1,0 +1,24 @@
+# Configuration Spotify Connect
+# Nom du périphérique Spotify qui apparaîtra dans la liste des appareils
+device_name=Mon Assistant Pi
+
+# Qualité audio (bitrate en kbps: 96, 160, 320)
+bitrate=320
+
+# Volume initial (0-100)
+initial_volume=50
+
+# Normalisation du volume (true/false)
+volume_normalisation=true
+
+# Pregain pour la normalisation (-10 à 10)
+normalisation_pregain=0
+
+# Lecture automatique (true/false)
+autoplay=true
+
+# Taille du cache (en Mo ou Go avec suffixe M/G)
+cache_size=1G
+
+# Type de périphérique (speaker, computer, smartphone, etc.)
+device_type=speaker

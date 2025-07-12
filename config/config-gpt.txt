@@ -1,0 +1,29 @@
+# Configuration Assistant Vocal GPT
+# Active ou désactive l'assistant vocal (true/false)
+enabled=true
+
+# Numéro du pin GPIO pour le bouton d'activation
+# Par défaut GPIO17 (pin physique 11)
+gpio_pin=17
+
+# Durée d'enregistrement en secondes
+recording_duration=10
+
+# Taux d'échantillonnage audio (Hz)
+sample_rate=44100
+
+# Seuil de détection du silence (optionnel)
+silence_threshold=500
+
+# Langue d'enregistrement pour Whisper
+recording_language=fr
+
+# Activation automatique par détection de voix (true/false)
+# Si false, seul le bouton déclenche l'enregistrement
+voice_activation=false
+
+# Niveau de sensibilité pour la détection de voix (1-10)
+voice_sensitivity=5
+
+# Temps d'attente avant arrêt automatique (en secondes)
+auto_stop_timeout=15

@@ -1,0 +1,23 @@
+# Configuration Bluetooth
+# Nom de l'enceinte Bluetooth à connecter automatiquement
+# Doit correspondre exactement au nom de l'enceinte (sensible à la casse)
+speaker_name=Mon Enceinte Bluetooth
+
+# Connexion automatique au démarrage (true/false)
+auto_connect=true
+
+# Timeout de connexion en secondes
+connection_timeout=30
+
+# Reconnexion automatique si déconnecté (true/false)
+auto_reconnect=true
+
+# Intervalle de vérification de la connexion en secondes
+check_interval=30
+
+# Qualité audio Bluetooth (A2DP)
+# Peut être : auto, sbc, aptx, ldac
+audio_codec=auto
+
+# Volume par défaut pour l'enceinte Bluetooth (0-100)
+default_volume=70

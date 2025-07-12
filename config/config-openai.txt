@@ -1,0 +1,36 @@
+# Configuration OpenAI API
+# Clé API OpenAI (obligatoire)
+# Remplacez par votre vraie clé API OpenAI
+api_key=sk-votre-clé-openai-ici
+
+# Modèle GPT à utiliser
+# Options : gpt-3.5-turbo, gpt-4, gpt-4o, gpt-4-turbo
+model=gpt-4o
+
+# Modèle Whisper pour la transcription
+# Options : whisper-1
+whisper_model=whisper-1
+
+# Nombre maximum de tokens pour la réponse
+max_tokens=150
+
+# Température pour la créativité des réponses (0.0 à 2.0)
+# 0.0 = très conservateur, 2.0 = très créatif
+temperature=0.7
+
+# Pénalité de fréquence (-2.0 à 2.0)
+# Réduit la répétition des mots
+frequency_penalty=0.0
+
+# Pénalité de présence (-2.0 à 2.0)
+# Encourage la diversité des sujets
+presence_penalty=0.0
+
+# Timeout pour les requêtes API (en secondes)
+request_timeout=30
+
+# Nombre maximum de tentatives en cas d'échec
+max_retries=3
+
+# Délai entre les tentatives (en secondes)
+retry_delay=2
