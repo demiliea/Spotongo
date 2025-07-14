@@ -78,36 +78,108 @@ mkdir -p $PROJECT_DIR/logs
 mkdir -p $PROJECT_DIR/temp
 chown -R $SERVICE_USER:$SERVICE_USER $PROJECT_DIR
 
-# Installation de Balena WiFi Connect
-ARCH=$(uname -m)
-if [[ "$ARCH" == "aarch64" ]]; then
-    WIFI_CONNECT_URL="https://github.com/balena-os/wifi-connect/releases/download/v4.4.6/wifi-connect-v4.4.6-linux-aarch64.tar.gz"
-else
-    WIFI_CONNECT_URL="https://github.com/balena-os/wifi-connect/releases/download/v4.4.6/wifi-connect-v4.4.6-linux-armv7hf.tar.gz"
-fi
+# Configuration du point d'accès WiFi avec hostapd et dnsmasq
+log "Configuration du point d'accès WiFi..."
 
-rm -rf /tmp/wifi-connect /tmp/ui
-wget -O /tmp/wifi-connect.tar.gz "$WIFI_CONNECT_URL"
-tar -xzf /tmp/wifi-connect.tar.gz -C /tmp/
-cp /tmp/wifi-connect /usr/local/bin/
-chmod +x /usr/local/bin/wifi-connect
+# Configuration de hostapd
+cat > /etc/hostapd/hostapd.conf << EOF
+interface=wlan0
+driver=nl80211
+ssid=RPi-Assistant
+hw_mode=g
+channel=7
+wmm_enabled=0
+macaddr_acl=0
+auth_algs=1
+ignore_broadcast_ssid=0
+wpa=2
+wpa_passphrase=raspberry
+wpa_key_mgmt=WPA-PSK
+wpa_pairwise=TKIP
+rsn_pairwise=CCMP
+EOF
 
-# Configuration du service WiFi Connect
-cat > /etc/systemd/system/wifi-connect.service << EOF
+# Configuration par défaut de hostapd
+echo 'DAEMON_CONF="/etc/hostapd/hostapd.conf"' > /etc/default/hostapd
+
+# Configuration de dnsmasq pour le captive portal
+cat > /etc/dnsmasq.conf << EOF
+interface=wlan0
+dhcp-range=192.168.4.2,192.168.4.20,255.255.255.0,24h
+domain=wlan
+address=/#/192.168.4.1
+EOF
+
+# Script de démarrage du hotspot
+cat > $PROJECT_DIR/scripts/start_hotspot.sh << 'EOF'
+#!/bin/bash
+# Configuration de l'interface WiFi
+ip link set wlan0 down
+iw dev wlan0 set type __ap
+ip link set wlan0 up
+ip addr add 192.168.4.1/24 dev wlan0
+
+# Démarrage des services
+systemctl start hostapd
+systemctl start dnsmasq
+
+# Configuration du NAT pour partager la connexion Ethernet
+iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+iptables -A FORWARD -i eth0 -o wlan0 -m state --state RELATED,ESTABLISHED -j ACCEPT
+iptables -A FORWARD -i wlan0 -o eth0 -j ACCEPT
+
+# Sauvegarde des règles iptables
+iptables-save > /etc/iptables/rules.v4
+
+echo "Hotspot démarré - SSID: RPi-Assistant, Mot de passe: raspberry"
+EOF
+
+chmod +x $PROJECT_DIR/scripts/start_hotspot.sh
+
+# Script d'arrêt du hotspot
+cat > $PROJECT_DIR/scripts/stop_hotspot.sh << 'EOF'
+#!/bin/bash
+# Arrêt des services
+systemctl stop hostapd
+systemctl stop dnsmasq
+
+# Remise en mode managed
+ip link set wlan0 down
+iw dev wlan0 set type managed
+ip link set wlan0 up
+
+# Suppression de la configuration IP
+ip addr del 192.168.4.1/24 dev wlan0 2>/dev/null || true
+
+# Nettoyage des règles iptables
+iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE 2>/dev/null || true
+iptables -D FORWARD -i eth0 -o wlan0 -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
+iptables -D FORWARD -i wlan0 -o eth0 -j ACCEPT 2>/dev/null || true
+
+echo "Hotspot arrêté"
+EOF
+
+chmod +x $PROJECT_DIR/scripts/stop_hotspot.sh
+
+# Service systemd pour le hotspot
+cat > /etc/systemd/system/rpi-hotspot.service << EOF
 [Unit]
-Description=Balena WiFi Connect
+Description=Raspberry Pi Hotspot
 After=network.target
 
 [Service]
-Type=simple
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=$PROJECT_DIR/scripts/start_hotspot.sh
+ExecStop=$PROJECT_DIR/scripts/stop_hotspot.sh
 User=root
-ExecStart=/usr/local/bin/wifi-connect --portal-ssid RPi-Assistant --portal-passphrase raspberry
-Restart=on-failure
-RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
 EOF
+
+# Activation du forwarding IP
+echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.conf
 
 # Installation de Raspotify
 log "Installation de Raspotify..."
@@ -247,7 +319,9 @@ log "Configuration des services..."
 systemctl daemon-reload
 systemctl enable rpi-assistant
 systemctl enable raspotify
-systemctl enable wifi-connect
+systemctl enable hostapd
+systemctl enable dnsmasq
+systemctl enable rpi-hotspot
 
 # Redémarrage des services
 systemctl restart bluetooth
