@@ -68,7 +68,8 @@ apt install -y \
     ffmpeg \
     dnsmasq \
     hostapd \
-    iptables-persistent
+    iptables-persistent \
+    libbluetooth-dev
 
 # Création des dossiers
 log "Création des dossiers..."
@@ -78,8 +79,15 @@ mkdir -p $PROJECT_DIR/temp
 chown -R $SERVICE_USER:$SERVICE_USER $PROJECT_DIR
 
 # Installation de Balena WiFi Connect
-log "Installation de Balena WiFi Connect..."
-wget -O /tmp/wifi-connect.tar.gz https://github.com/balena-os/wifi-connect/releases/download/v4.4.6/wifi-connect-v4.4.6-linux-arm.tar.gz
+ARCH=$(uname -m)
+if [[ "$ARCH" == "aarch64" ]]; then
+    WIFI_CONNECT_URL="https://github.com/balena-os/wifi-connect/releases/download/v4.4.6/wifi-connect-v4.4.6-linux-aarch64.tar.gz"
+else
+    WIFI_CONNECT_URL="https://github.com/balena-os/wifi-connect/releases/download/v4.4.6/wifi-connect-v4.4.6-linux-armv7hf.tar.gz"
+fi
+
+rm -rf /tmp/wifi-connect /tmp/ui
+wget -O /tmp/wifi-connect.tar.gz "$WIFI_CONNECT_URL"
 tar -xzf /tmp/wifi-connect.tar.gz -C /tmp/
 cp /tmp/wifi-connect /usr/local/bin/
 chmod +x /usr/local/bin/wifi-connect
@@ -155,13 +163,14 @@ pip install --upgrade pip
 pip install \
     openai \
     pyaudio \
-    pybluez \
     requests \
     configparser \
     RPi.GPIO \
     pydub \
     gTTS \
     pygame
+
+pip install git+https://github.com/pybluez/pybluez.git@master
 
 # Copie des fichiers source
 log "Copie des fichiers source..."
@@ -191,6 +200,7 @@ WantedBy=multi-user.target
 EOF
 
 # Script de configuration Bluetooth
+mkdir -p $PROJECT_DIR/scripts
 cat > $PROJECT_DIR/scripts/setup_bluetooth.sh << 'EOF'
 #!/bin/bash
 # Script de configuration Bluetooth
@@ -241,7 +251,6 @@ systemctl enable wifi-connect
 
 # Redémarrage des services
 systemctl restart bluetooth
-systemctl restart pulseaudio
 
 log "Installation terminée avec succès!"
 log "Veuillez copier les fichiers de configuration dans $BOOT_DIR et redémarrer le système."
