@@ -317,6 +317,10 @@ usermod -a -G gpio $SERVICE_USER
 # Configuration des services
 log "Configuration des services..."
 systemctl daemon-reload
+
+# Unmask hostapd service (often masked by default)
+systemctl unmask hostapd
+
 systemctl enable rpi-assistant
 systemctl enable raspotify
 systemctl enable hostapd
