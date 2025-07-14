@@ -383,7 +383,12 @@ cat > /var/www/captive-portal/index.html << 'EOF'
                 <input type="password" id="password" name="password">
             </div>
             
-            <button type="submit">Se connecter</button>
+            <div class="form-group">
+                <label for="speaker_name">Appareil audio Bluetooth (optionnel):</label>
+                <input type="text" id="speaker_name" name="speaker_name" placeholder="ex: AirPods, JBL Flip, Sony WH-1000XM4...">
+            </div>
+            
+            <button type="submit">Configurer</button>
         </form>
         
         <div id="status" class="status" style="display: none;"></div>
@@ -395,6 +400,7 @@ cat > /var/www/captive-portal/index.html << 'EOF'
             
             const ssid = document.getElementById('ssid').value;
             const password = document.getElementById('password').value;
+            const speaker_name = document.getElementById('speaker_name').value;
             const status = document.getElementById('status');
             
             // Show loading
@@ -408,7 +414,7 @@ cat > /var/www/captive-portal/index.html << 'EOF'
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({ ssid: ssid, password: password })
+                body: JSON.stringify({ ssid: ssid, password: password, speaker_name: speaker_name })
             })
             .then(response => response.json())
             .then(data => {
@@ -451,13 +457,14 @@ class CaptivePortalHandler(BaseHTTPRequestHandler):
                 data = json.loads(post_data.decode('utf-8'))
                 ssid = data.get('ssid', '').strip()
                 password = data.get('password', '').strip()
+                speaker_name = data.get('speaker_name', '').strip()
                 
                 if not ssid:
                     self.send_json_response({'success': False, 'error': 'SSID requis'})
                     return
                 
                 # Configure WiFi
-                success = self.configure_wifi(ssid, password)
+                success = self.configure_wifi(ssid, password, speaker_name)
                 
                 if success:
                     self.send_json_response({'success': True})
@@ -471,7 +478,7 @@ class CaptivePortalHandler(BaseHTTPRequestHandler):
             except Exception as e:
                 self.send_json_response({'success': False, 'error': str(e)})
     
-    def configure_wifi(self, ssid, password):
+    def configure_wifi(self, ssid, password, speaker_name):
         try:
             # Create wpa_supplicant configuration
             config = f"""
@@ -489,10 +496,192 @@ network={{
             with open('/etc/wpa_supplicant/wpa_supplicant.conf', 'w') as f:
                 f.write(config)
             
+            # Configure Bluetooth speaker if name is provided
+            if speaker_name:
+                self.configure_bluetooth(speaker_name)
+            
             return True
         except Exception as e:
             print(f"Error configuring WiFi: {e}")
             return False
+    
+    def configure_bluetooth(self, speaker_name):
+        try:
+            # Ensure bluetooth is enabled and running
+            subprocess.run(['systemctl', 'start', 'bluetooth'], check=False)
+            subprocess.run(['systemctl', 'enable', 'bluetooth'], check=False)
+            time.sleep(2)
+            
+            print(f"Scanning for Bluetooth devices named: {speaker_name}")
+            
+            # Use bluetoothctl commands step by step
+            commands = [
+                'power on',
+                'agent on',
+                'default-agent',
+                'scan on'
+            ]
+            
+            for cmd in commands:
+                subprocess.run(['bluetoothctl'] + cmd.split(), check=False)
+                time.sleep(1)
+            
+            # Scan for longer to find devices
+            time.sleep(15)
+            
+            # Get list of discovered devices
+            result = subprocess.run(['bluetoothctl', 'devices'], capture_output=True, text=True)
+            devices_output = result.stdout
+            print(f"Found devices: {devices_output}")
+            
+            # Look for device with partial name match (case insensitive)
+            mac_address = None
+            for line in devices_output.split('\n'):
+                if speaker_name.lower() in line.lower():
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        mac_address = parts[1]
+                        break
+            
+            if mac_address:
+                print(f"Found device {speaker_name} with MAC: {mac_address}")
+                
+                # Pair, trust and connect with retry logic
+                success = False
+                for attempt in range(3):  # Try 3 times
+                    print(f"Pairing attempt {attempt + 1}/3 for {speaker_name}")
+                    
+                    try:
+                        # Remove device if it exists
+                        subprocess.run(['bluetoothctl', 'remove', mac_address], 
+                                     capture_output=True, check=False)
+                        time.sleep(2)
+                        
+                        # Pair with extended timeout
+                        result = subprocess.run(['bluetoothctl', 'pair', mac_address], 
+                                              capture_output=True, text=True, timeout=45)
+                        print(f"Pair result: {result.stdout}")
+                        
+                        if "successful" in result.stdout.lower() or result.returncode == 0:
+                            # Trust the device
+                            subprocess.run(['bluetoothctl', 'trust', mac_address], 
+                                         capture_output=True, timeout=10)
+                            time.sleep(2)
+                            
+                            # Connect to device
+                            result = subprocess.run(['bluetoothctl', 'connect', mac_address], 
+                                                  capture_output=True, text=True, timeout=30)
+                            print(f"Connect result: {result.stdout}")
+                            
+                            if "successful" in result.stdout.lower() or result.returncode == 0:
+                                success = True
+                                # Configure audio routing
+                                self.configure_bluetooth_audio(mac_address)
+                                break
+                        
+                    except subprocess.TimeoutExpired:
+                        print(f"Timeout on attempt {attempt + 1}")
+                    except Exception as e:
+                        print(f"Error on attempt {attempt + 1}: {e}")
+                    
+                    if attempt < 2:  # Don't sleep after last attempt
+                        print("Waiting before retry...")
+                        time.sleep(5)
+                 
+                # Stop scanning
+                subprocess.run(['bluetoothctl', 'scan', 'off'], check=False)
+                
+                if success:
+                    print(f"Bluetooth device {speaker_name} configured successfully")
+                else:
+                    print(f"Failed to pair {speaker_name} after 3 attempts")
+            else:
+                print(f"Device {speaker_name} not found. Available devices:")
+                print(devices_output)
+                
+        except Exception as e:
+            print(f"Error configuring Bluetooth: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def configure_bluetooth_audio(self, mac_address):
+        try:
+            # Wait for audio system to detect the Bluetooth device
+            time.sleep(5)
+            
+            # Convert MAC address to audio sink format (works with both PulseAudio and PipeWire)
+            pa_mac = mac_address.replace(':', '_')
+            
+            # Try both possible sink name formats
+            sink_names = [
+                f"bluez_output.{pa_mac}.1",  # PipeWire format
+                f"bluez_sink.{pa_mac}.a2dp_sink"  # PulseAudio format
+            ]
+            
+            print(f"Configuring audio routing for Bluetooth device {mac_address}")
+            
+            # Check which sink exists
+            result = subprocess.run(['pactl', 'list', 'sinks', 'short'], 
+                                  capture_output=True, text=True)
+            available_sinks = result.stdout
+            
+            active_sink = None
+            for sink_name in sink_names:
+                if sink_name in available_sinks:
+                    active_sink = sink_name
+                    break
+            
+            if active_sink:
+                print(f"Found audio sink: {active_sink}")
+                
+                # Set as default sink
+                subprocess.run(['pactl', 'set-default-sink', active_sink], 
+                             capture_output=True, check=False)
+                
+                # Update Raspotify configuration to use this device
+                self.update_raspotify_config(active_sink)
+                
+                print(f"Audio routing configured successfully")
+            else:
+                print(f"No audio sink found for {mac_address}")
+                print(f"Available sinks: {available_sinks}")
+            
+        except Exception as e:
+            print(f"Error configuring audio routing: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def update_raspotify_config(self, sink_name):
+        try:
+            # Set the Bluetooth device as default for pi user
+            subprocess.run(['sudo', '-u', 'pi', 'pactl', 'set-default-sink', sink_name], 
+                         capture_output=True, check=False)
+            
+            # Don't specify device in Raspotify - let it use system default
+            # This avoids permission issues
+            config_content = '''# Raspotify configuration
+DEVICE_NAME="Mon Assistant Pi"
+BITRATE="320"
+CACHE_SIZE="1G"
+DEVICE_TYPE="speaker"
+INITIAL_VOLUME="50"
+VOLUME_NORMALISATION="true"
+NORMALISATION_PREGAIN="0"
+AUTOPLAY="true"
+# Device not specified - uses system default
+'''
+            
+            # Write config file
+            with open('/etc/default/raspotify', 'w') as f:
+                f.write(config_content)
+            
+            # Restart raspotify
+            subprocess.run(['systemctl', 'restart', 'raspotify'], check=False)
+            
+            print(f"Updated Raspotify configuration to use default sink {sink_name}")
+            
+        except Exception as e:
+            print(f"Error updating Raspotify config: {e}")
     
     def restart_networking(self):
         time.sleep(2)
@@ -562,6 +751,19 @@ INITIAL_VOLUME="50"
 VOLUME_NORMALISATION="true"
 NORMALISATION_PREGAIN="0"
 AUTOPLAY="true"
+EOF
+
+# Configuration du service Raspotify pour qu'il fonctionne avec l'audio utilisateur
+mkdir -p /etc/systemd/system/raspotify.service.d
+cat > /etc/systemd/system/raspotify.service.d/user.conf << EOF
+[Service]
+User=pi
+Group=pi
+RuntimeDirectory=
+RuntimeDirectoryMode=
+PrivateTmp=false
+ProtectSystem=false
+ProtectHome=false
 EOF
 
 # Configuration du Bluetooth
