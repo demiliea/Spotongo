@@ -69,7 +69,8 @@ apt install -y \
     dnsmasq \
     hostapd \
     iptables-persistent \
-    libbluetooth-dev
+    libbluetooth-dev \
+    nginx
 
 # Création des dossiers
 log "Création des dossiers..."
@@ -107,7 +108,14 @@ cat > /etc/dnsmasq.conf << EOF
 interface=wlan0
 dhcp-range=192.168.4.2,192.168.4.20,255.255.255.0,24h
 domain=wlan
+# Redirect all DNS queries to our captive portal
 address=/#/192.168.4.1
+# Don't read /etc/hosts
+no-hosts
+# Don't poll /etc/resolv.conf
+no-poll
+# Cache size
+cache-size=300
 EOF
 
 # Script de démarrage du hotspot
@@ -155,6 +163,12 @@ systemctl start hostapd
 echo "Démarrage de dnsmasq..."
 systemctl start dnsmasq
 
+echo "Démarrage de nginx..."
+systemctl start nginx
+
+echo "Démarrage de l'API captive portal..."
+systemctl start captive-portal-api
+
 # Configuration du NAT pour partager la connexion Ethernet
 echo "Configuration du NAT..."
 iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE 2>/dev/null || true
@@ -165,6 +179,7 @@ iptables -A FORWARD -i wlan0 -o eth0 -j ACCEPT 2>/dev/null || true
 iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
 
 echo "Hotspot démarré avec succès - SSID: RPi-Assistant, Mot de passe: raspberry"
+echo "Captive portal disponible à l'adresse: http://192.168.4.1"
 EOF
 
 chmod +x $PROJECT_DIR/scripts/start_hotspot.sh
@@ -234,6 +249,303 @@ EOF
 
 # Activation du forwarding IP
 echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.conf
+
+# Configuration de nginx pour le captive portal
+cat > /etc/nginx/sites-available/captive-portal << EOF
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+    
+    root /var/www/captive-portal;
+    index index.html;
+    
+    # Redirect all requests to captive portal
+    location / {
+        try_files \$uri \$uri/ /index.html;
+    }
+    
+    # API endpoint for WiFi configuration
+    location /api/ {
+        proxy_pass http://127.0.0.1:8080/;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+    }
+}
+EOF
+
+# Activer le site captive portal
+ln -sf /etc/nginx/sites-available/captive-portal /etc/nginx/sites-enabled/
+rm -f /etc/nginx/sites-enabled/default
+
+# Créer le dossier web pour le captive portal
+mkdir -p /var/www/captive-portal
+
+# Créer la page web du captive portal
+cat > /var/www/captive-portal/index.html << 'EOF'
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Configuration WiFi - RPi Assistant</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            margin: 0;
+            padding: 20px;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .container {
+            background: white;
+            border-radius: 12px;
+            padding: 2rem;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            max-width: 400px;
+            width: 100%;
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 1.5rem;
+        }
+        .form-group {
+            margin-bottom: 1rem;
+        }
+        label {
+            display: block;
+            margin-bottom: 0.5rem;
+            color: #555;
+            font-weight: 500;
+        }
+        input[type="text"], input[type="password"], select {
+            width: 100%;
+            padding: 0.75rem;
+            border: 2px solid #e1e5e9;
+            border-radius: 6px;
+            font-size: 1rem;
+            transition: border-color 0.3s ease;
+        }
+        input[type="text"]:focus, input[type="password"]:focus, select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        button {
+            width: 100%;
+            padding: 0.75rem;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 1rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: transform 0.2s ease;
+        }
+        button:hover {
+            transform: translateY(-2px);
+        }
+        .status {
+            margin-top: 1rem;
+            padding: 0.75rem;
+            border-radius: 6px;
+            text-align: center;
+        }
+        .status.success {
+            background: #d4edda;
+            color: #155724;
+        }
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔧 Configuration WiFi</h1>
+        <p style="text-align: center; color: #666; margin-bottom: 2rem;">
+            Connectez votre Raspberry Pi Assistant à votre réseau WiFi
+        </p>
+        
+        <form id="wifiForm">
+            <div class="form-group">
+                <label for="ssid">Nom du réseau (SSID):</label>
+                <input type="text" id="ssid" name="ssid" required>
+            </div>
+            
+            <div class="form-group">
+                <label for="password">Mot de passe WiFi:</label>
+                <input type="password" id="password" name="password">
+            </div>
+            
+            <button type="submit">Se connecter</button>
+        </form>
+        
+        <div id="status" class="status" style="display: none;"></div>
+    </div>
+
+    <script>
+        document.getElementById('wifiForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            const ssid = document.getElementById('ssid').value;
+            const password = document.getElementById('password').value;
+            const status = document.getElementById('status');
+            
+            // Show loading
+            status.style.display = 'block';
+            status.className = 'status';
+            status.textContent = 'Configuration en cours...';
+            
+            // Send configuration to API
+            fetch('/api/configure', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ ssid: ssid, password: password })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    status.className = 'status success';
+                    status.textContent = 'Configuration réussie! Redémarrage en cours...';
+                } else {
+                    status.className = 'status error';
+                    status.textContent = 'Erreur: ' + (data.error || 'Configuration échouée');
+                }
+            })
+            .catch(error => {
+                status.className = 'status error';
+                status.textContent = 'Erreur de connexion au serveur';
+            });
+        });
+    </script>
+</body>
+</html>
+EOF
+
+# Créer le serveur API Python pour la configuration WiFi
+cat > $PROJECT_DIR/captive_portal_api.py << 'EOF'
+#!/usr/bin/env python3
+import json
+import subprocess
+import os
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from urllib.parse import urlparse, parse_qs
+import threading
+import time
+
+class CaptivePortalHandler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        if self.path == '/configure':
+            content_length = int(self.headers['Content-Length'])
+            post_data = self.rfile.read(content_length)
+            
+            try:
+                data = json.loads(post_data.decode('utf-8'))
+                ssid = data.get('ssid', '').strip()
+                password = data.get('password', '').strip()
+                
+                if not ssid:
+                    self.send_json_response({'success': False, 'error': 'SSID requis'})
+                    return
+                
+                # Configure WiFi
+                success = self.configure_wifi(ssid, password)
+                
+                if success:
+                    self.send_json_response({'success': True})
+                    # Restart networking after a delay
+                    threading.Thread(target=self.restart_networking).start()
+                else:
+                    self.send_json_response({'success': False, 'error': 'Erreur de configuration'})
+                    
+            except json.JSONDecodeError:
+                self.send_json_response({'success': False, 'error': 'JSON invalide'})
+            except Exception as e:
+                self.send_json_response({'success': False, 'error': str(e)})
+    
+    def configure_wifi(self, ssid, password):
+        try:
+            # Create wpa_supplicant configuration
+            config = f"""
+country=GB
+ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
+update_config=1
+
+network={{
+    ssid="{ssid}"
+    psk="{password}"
+    key_mgmt=WPA-PSK
+}}
+"""
+            
+            with open('/etc/wpa_supplicant/wpa_supplicant.conf', 'w') as f:
+                f.write(config)
+            
+            return True
+        except Exception as e:
+            print(f"Error configuring WiFi: {e}")
+            return False
+    
+    def restart_networking(self):
+        time.sleep(2)
+        try:
+            # Stop hotspot
+            subprocess.run(['systemctl', 'stop', 'rpi-hotspot'], check=False)
+            subprocess.run(['systemctl', 'stop', 'hostapd'], check=False)
+            subprocess.run(['systemctl', 'stop', 'dnsmasq'], check=False)
+            
+            # Reset interface to managed mode
+            subprocess.run(['ip', 'link', 'set', 'wlan0', 'down'], check=False)
+            subprocess.run(['iw', 'dev', 'wlan0', 'set', 'type', 'managed'], check=False)
+            subprocess.run(['ip', 'link', 'set', 'wlan0', 'up'], check=False)
+            
+            # Start wpa_supplicant
+            subprocess.run(['systemctl', 'restart', 'wpa_supplicant'], check=False)
+            
+            print("Network configuration applied")
+        except Exception as e:
+            print(f"Error restarting networking: {e}")
+    
+    def send_json_response(self, data):
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.end_headers()
+        self.wfile.write(json.dumps(data).encode('utf-8'))
+
+if __name__ == '__main__':
+    server = HTTPServer(('127.0.0.1', 8080), CaptivePortalHandler)
+    print("Captive portal API server started on port 8080")
+    server.serve_forever()
+EOF
+
+chmod +x $PROJECT_DIR/captive_portal_api.py
+
+# Service systemd pour l'API du captive portal
+cat > /etc/systemd/system/captive-portal-api.service << EOF
+[Unit]
+Description=Captive Portal API
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=$PROJECT_DIR
+ExecStart=/usr/bin/python3 $PROJECT_DIR/captive_portal_api.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
 
 # Installation de Raspotify
 log "Installation de Raspotify..."
@@ -381,6 +693,8 @@ systemctl enable hostapd
 systemctl enable dnsmasq
 systemctl enable unblock-rfkill
 systemctl enable rpi-hotspot
+systemctl enable captive-portal-api
+systemctl enable nginx
 
 # Redémarrage des services
 systemctl restart bluetooth
