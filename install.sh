@@ -113,25 +113,58 @@ EOF
 # Script de démarrage du hotspot
 cat > $PROJECT_DIR/scripts/start_hotspot.sh << 'EOF'
 #!/bin/bash
-# Configuration de l'interface WiFi
+set -e
+
+echo "Démarrage du hotspot WiFi..."
+
+# Ensure WiFi is unblocked and in AP mode (with retries)
+for i in {1..3}; do
+    echo "Tentative $i/3 de déblocage RF-kill..."
+    rfkill unblock all
+    sleep 2
+    
+    # Check if unblocked
+    if ! rfkill list | grep -q "Soft blocked: yes"; then
+        echo "RF-kill débloqué avec succès"
+        break
+    fi
+    
+    if [ $i -eq 3 ]; then
+        echo "Erreur: Impossible de débloquer RF-kill après 3 tentatives"
+        exit 1
+    fi
+done
+
+# Configuration de l'interface WiFi (ensure it's in AP mode)
+echo "Configuration de l'interface wlan0..."
 ip link set wlan0 down
 iw dev wlan0 set type __ap
 ip link set wlan0 up
+
+# Remove existing IP if present, then add new one
+ip addr del 192.168.4.1/24 dev wlan0 2>/dev/null || true
 ip addr add 192.168.4.1/24 dev wlan0
 
+# Wait a moment for interface to be ready
+sleep 3
+
 # Démarrage des services
+echo "Démarrage de hostapd..."
 systemctl start hostapd
+
+echo "Démarrage de dnsmasq..."
 systemctl start dnsmasq
 
 # Configuration du NAT pour partager la connexion Ethernet
-iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
-iptables -A FORWARD -i eth0 -o wlan0 -m state --state RELATED,ESTABLISHED -j ACCEPT
-iptables -A FORWARD -i wlan0 -o eth0 -j ACCEPT
+echo "Configuration du NAT..."
+iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE 2>/dev/null || true
+iptables -A FORWARD -i eth0 -o wlan0 -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
+iptables -A FORWARD -i wlan0 -o eth0 -j ACCEPT 2>/dev/null || true
 
 # Sauvegarde des règles iptables
-iptables-save > /etc/iptables/rules.v4
+iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
 
-echo "Hotspot démarré - SSID: RPi-Assistant, Mot de passe: raspberry"
+echo "Hotspot démarré avec succès - SSID: RPi-Assistant, Mot de passe: raspberry"
 EOF
 
 chmod +x $PROJECT_DIR/scripts/start_hotspot.sh
@@ -161,11 +194,32 @@ EOF
 
 chmod +x $PROJECT_DIR/scripts/stop_hotspot.sh
 
+# Service systemd pour débloquer rfkill au démarrage
+cat > /etc/systemd/system/unblock-rfkill.service << EOF
+[Unit]
+Description=Unblock WiFi rfkill and prepare interface
+Before=hostapd.service
+Before=rpi-hotspot.service
+After=sys-subsystem-net-devices-wlan0.device
+Wants=sys-subsystem-net-devices-wlan0.device
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c 'sleep 5 && rfkill unblock all && sleep 3 && ip link set wlan0 down && iw dev wlan0 set type __ap && ip link set wlan0 up'
+RemainAfterExit=yes
+TimeoutStartSec=30
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
 # Service systemd pour le hotspot
 cat > /etc/systemd/system/rpi-hotspot.service << EOF
 [Unit]
 Description=Raspberry Pi Hotspot
 After=network.target
+After=unblock-rfkill.service
+Wants=unblock-rfkill.service
 
 [Service]
 Type=oneshot
@@ -325,6 +379,7 @@ systemctl enable rpi-assistant
 systemctl enable raspotify
 systemctl enable hostapd
 systemctl enable dnsmasq
+systemctl enable unblock-rfkill
 systemctl enable rpi-hotspot
 
 # Redémarrage des services
